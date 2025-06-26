@@ -4,12 +4,20 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type Headers map[string]string
 
 func NewHeaders() Headers {
 	return Headers{}
+}
+
+func (h Headers) Get(key string) string {
+	if v, found := h[strings.ToLower(key)]; found {
+		return v
+	}
+	return ""
 }
 
 func (h Headers) Parse(data []byte) (n int, done bool, err error) {

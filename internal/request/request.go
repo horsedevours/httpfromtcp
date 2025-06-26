@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -16,6 +18,7 @@ type ParseState int
 const (
 	Initialized ParseState = iota
 	ParsingHeaders
+	ParsingBody
 	Done
 )
 
@@ -23,6 +26,7 @@ type Request struct {
 	ParseState  ParseState
 	RequestLine RequestLine
 	Headers     headers.Headers
+	Body        []byte
 }
 
 type RequestLine struct {
@@ -74,7 +78,7 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 
 func (r *Request) parse(data []byte) (int, error) {
 	totalBytesParsed := 0
-	for {
+	for r.ParseState != Done {
 		switch r.ParseState {
 		case Initialized:
 			n, err := r.parseRequestLine(data[totalBytesParsed:])
@@ -96,17 +100,39 @@ func (r *Request) parse(data []byte) (int, error) {
 			}
 			totalBytesParsed += n
 			if done {
+				contentLength := r.Headers.Get("Content-Length")
+				if contentLength == "" || contentLength == "0" {
+					r.ParseState = Done
+					return totalBytesParsed, nil
+				}
+				r.ParseState = ParsingBody
+			}
+		case ParsingBody:
+			contentLength := r.Headers.Get("Content-Length")
+			numContentLength, err := strconv.Atoi(contentLength)
+			if err != nil {
+				return 0, fmt.Errorf("cannot convert content length to number: %s", contentLength)
+			}
+			r.Body = append(r.Body, data[totalBytesParsed:]...)
+			totalBytesParsed += len(data[totalBytesParsed:])
+
+			if len(r.Body) > numContentLength {
+				return 0, fmt.Errorf("length of body (%d) exceeds content length (%d)", len(r.Body), numContentLength)
+			}
+			if len(r.Body) == numContentLength {
 				r.ParseState = Done
+				log.Println("All content consumed")
 			}
 		case Done:
 			return 0, errors.New("error trying to read data in a done state")
 		default:
 			return 0, errors.New("error unknown state")
 		}
-		if totalBytesParsed == len(data) || r.ParseState == Done {
-			return totalBytesParsed, nil
+		if totalBytesParsed == len(data) {
+			break
 		}
 	}
+	return totalBytesParsed, nil
 }
 
 func (r *Request) parseRequestLine(request []byte) (int, error) {
